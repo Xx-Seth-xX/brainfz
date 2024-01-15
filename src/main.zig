@@ -85,7 +85,7 @@ const VirtualMachine = struct {
         if (try stdin.read(&buff) == 0) {
             buff[0] = 0;
         }
-        self.memory[self.ptr] = @as(u8, @intCast(buff[0]));
+        self.memory[self.ptr] = @as(MemType, @intCast(buff[0]));
     }
 
     // [ 	If the byte at the data pointer is zero, then instead of moving the instruction pointer forward to the next command, jump it forward to the command after the matching ] command.
