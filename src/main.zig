@@ -1,15 +1,20 @@
 const std = @import("std");
 const stdout = std.io.getStdOut().writer();
-const stdin = blk: {
-    const aux = std.io.getStdIn();
-    break :blk aux;
-};
+const stdin = std.io.getStdIn();
 
 const VirtualMachine = struct {
     const Self = @This();
-    const size: comptime_int = 10;
+    const size: comptime_int = 1024;
     const MemType = u8;
     const debug: bool = false;
+    const operands = "><+-.,[]";
+
+    fn isOperand(c: u8) bool {
+        for (VirtualMachine.operands) |op| {
+            if (op == c) return true;
+        }
+        return false;
+    }
 
     memory: [size]MemType,
     ptr: usize,
@@ -142,20 +147,61 @@ const VirtualMachine = struct {
     }
 };
 
-pub fn main() !void {
-    const setup = "+++.>++.";
-    const body = "[[>+>+<<-]>>[-<<+>>]<<<->]";
-    const program = setup ++ body;
-    // hello world program
-    // const program = "++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++.";
-    std.log.info("Executing program: \"{s}\"", .{program});
-    var vm = VirtualMachine.init(program);
+fn parseProgram(alloc: std.mem.Allocator, text: []const u8) !std.ArrayList(u8) {
+    var program = std.ArrayList(u8).init(alloc);
+    for (text) |c| {
+        if (VirtualMachine.isOperand(c)) {
+            try program.append(c);
+        }
+    }
+    // var iter_lines = std.mem.tokenizeScalar(u8, text, '\n');
+    // while (iter_lines.next()) |line| {
+    //     const index_of_comment = std.mem.indexOf(u8, line, "//");
+    //     if (index_of_comment) |i| {
+    //         var words_it = std.mem.tokenizeAny(u8, line[0..i], " \t");
+    //         while (words_it.next()) |w| {
+    //             try program.appendSlice(w);
+    //         }
+    //     } else {
+    //         var words_it = std.mem.tokenizeAny(u8, line, " \t");
+    //         while (words_it.next()) |w| {
+    //             try program.appendSlice(w);
+    //         }
+    //     }
+    // }
+    return program;
+}
+
+pub fn main() !u8 {
+    var args_it = std.process.args();
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const alloc = gpa.allocator();
+
+    const program_name = args_it.next().?;
+    const filename = args_it.next() orelse {
+        std.log.err("You have to provide a filename", .{});
+        std.log.err("Usage: {s} <program> ", .{program_name});
+        return 1;
+    };
+
+    const file = try std.fs.cwd().openFile(filename, .{});
+    const text = try file.readToEndAlloc(alloc, 1024 * 1024); // 1MB should be more than enough
+    defer alloc.free(text);
+    const program = try parseProgram(alloc, text);
+    defer program.deinit();
+
+    // std.log.info("Executing program: \"{s}\"", .{program.items});
+    var vm = VirtualMachine.init(program.items);
     vm.execute_program() catch |err|
         {
         std.log.err("Error executing machine", .{});
         std.log.err("Final state = {}", .{vm});
         return err;
     };
+    // std.log.info("Final state:", .{});
+    // std.log.info("    ptr = {}, iptr = {}", .{ vm.ptr, vm.iptr });
+    // std.log.info("    Memory: {any}", .{vm.memory});
     try stdout.writeByte('\n');
-    return;
+    return 0;
 }
