@@ -62,11 +62,19 @@ const VirtualMachine = struct {
     fn init(program: []const u8) Self {
         return Self{ .memory = [_]MemType{0} ** size, .ptr = 0, .program = program, .iptr = 0 };
     }
+    inline fn getAt(self: Self) MemType {
+        return self.memory[self.ptr];
+    }
+    inline fn setAt(self: *Self, v: MemType) void {
+        self.memory[self.ptr] = v;
+    }
     fn inc(self: *Self) void {
-        self.memory[self.ptr] += 1;
+        const val = @addWithOverflow(self.getAt(), 1)[0];
+        self.setAt(val);
     }
     fn dec(self: *Self) void {
-        self.memory[self.ptr] -= 1;
+        const val = @subWithOverflow(self.getAt(), 1)[0];
+        self.setAt(val);
     }
     fn incp(self: *Self) !void {
         if (self.ptr >= Self.size - 1) {
