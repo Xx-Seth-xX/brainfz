@@ -20,6 +20,7 @@ const VirtualMachine = struct {
     ptr: usize,
     program: []const u8,
     iptr: usize,
+    io_file: std.fs.File,
 
     // > 	Increment the data pointer by one (to point to the next cell to the right).
     // < 	Decrement the data pointer by one (to point to the next cell to the left).
@@ -59,8 +60,14 @@ const VirtualMachine = struct {
         self.ptr = 0;
         self.memory = [_]MemType{0} ** size;
     }
-    fn init(program: []const u8) Self {
-        return Self{ .memory = [_]MemType{0} ** size, .ptr = 0, .program = program, .iptr = 0 };
+    fn init(program: []const u8, io_file: std.fs.File) Self {
+        return Self{
+            .memory = [_]MemType{0} ** size,
+            .ptr = 0,
+            .program = program,
+            .iptr = 0,
+            .io_file = io_file,
+        };
     }
     inline fn getAt(self: Self) MemType {
         return self.memory[self.ptr];
@@ -90,18 +97,20 @@ const VirtualMachine = struct {
     }
     fn put(self: Self) !void {
         const c = self.memory[self.ptr];
-        try stdout.print("{c}", .{c});
+        _ = try stdout.write(&[_]MemType{c});
         if (debug) try stdout.print("\n");
     }
     fn get(self: *Self) !void {
         var buff: [1]u8 = undefined;
-        if (try stdin.read(&buff) == 0) {
+        if (try self.io_file.read(&buff) == 0) {
             buff[0] = 0;
         }
         self.memory[self.ptr] = @as(MemType, @intCast(buff[0]));
     }
 
-    // [ 	If the byte at the data pointer is zero, then instead of moving the instruction pointer forward to the next command, jump it forward to the command after the matching ] command.
+    // [ 	If the byte at the data pointer is zero,
+    // then instead of moving the instruction pointer forward to the next command,
+    // jump it forward to the command after the matching ] command.
     fn loopb(self: *Self) !void {
         if (self.memory[self.ptr] != 0) {
             return;
@@ -155,6 +164,14 @@ const VirtualMachine = struct {
     }
 };
 
+fn loadProgram(alloc: std.mem.Allocator, filename: []const u8) !std.ArrayList(u8) {
+    const file = try std.fs.cwd().openFile(filename, .{});
+    const text = try file.readToEndAlloc(alloc, 1024 * 1024); // 1MB should be more than enough
+    defer alloc.free(text);
+    const program = try parseProgram(alloc, text);
+    return program;
+}
+
 fn parseProgram(alloc: std.mem.Allocator, text: []const u8) !std.ArrayList(u8) {
     var program = std.ArrayList(u8).init(alloc);
     for (text) |c| {
@@ -193,20 +210,30 @@ pub fn main() !u8 {
         return 1;
     };
 
-    const file = try std.fs.cwd().openFile(filename, .{});
-    const text = try file.readToEndAlloc(alloc, 1024 * 1024); // 1MB should be more than enough
-    defer alloc.free(text);
-    const program = try parseProgram(alloc, text);
+    var program = try loadProgram(alloc, filename);
     defer program.deinit();
 
+    // Uncook terminal
+    var tty = try std.fs.openFileAbsolute("/dev/tty", .{});
+    defer tty.close();
+
+    const original_termios = try std.os.tcgetattr(tty.handle);
+    var raw = original_termios;
+
+    // Set to 0 echo and icanon flags
+    raw.lflag &= ~@as(std.os.system.tcflag_t, std.os.system.ECHO | std.os.system.ICANON);
+    try std.os.tcsetattr(tty.handle, .FLUSH, raw);
+
     // std.log.info("Executing program: \"{s}\"", .{program.items});
-    var vm = VirtualMachine.init(program.items);
-    vm.execute_program() catch |err|
-        {
+    var vm = VirtualMachine.init(program.items, tty);
+    vm.execute_program() catch |err| {
+        try std.os.tcsetattr(tty.handle, .FLUSH, original_termios);
         std.log.err("Error executing machine", .{});
         std.log.err("Final state = {}", .{vm});
         return err;
     };
+    try std.os.tcsetattr(tty.handle, .FLUSH, original_termios);
+
     // std.log.info("Final state:", .{});
     // std.log.info("    ptr = {}, iptr = {}", .{ vm.ptr, vm.iptr });
     // std.log.info("    Memory: {any}", .{vm.memory});
