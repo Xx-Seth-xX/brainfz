@@ -138,7 +138,9 @@ const VirtualMachine = struct {
         return error.UnmatchedOpeningBracket;
     }
 
-    // ] 	If the byte at the data pointer is nonzero, then instead of moving the instruction pointer forward to the next command, jump it back to the command after the matching [ command.[a]
+    // ] 	If the byte at the data pointer is nonzero,
+    // then instead of moving the instruction pointer forward to the next command
+    // , jump it back to the command after the matching [ command.[a]
     fn loope(self: *Self) !void {
         if (self.memory[self.ptr] == 0) {
             return;
@@ -165,31 +167,6 @@ const VirtualMachine = struct {
         return error.UnmatchedClosingBracket;
     }
 };
-
-// fn parseProgram(alloc: std.mem.Allocator, text: []const u8) !std.ArrayList(u8) {
-//     var program = std.ArrayList(u8).init(alloc);
-//     for (text) |c| {
-//         if (VirtualMachine.isOperand(c)) {
-//             try program.append(c);
-//         }
-//     }
-// var iter_lines = std.mem.tokenizeScalar(u8, text, '\n');
-// while (iter_lines.next()) |line| {
-//     const index_of_comment = std.mem.indexOf(u8, line, "//");
-//     if (index_of_comment) |i| {
-//         var words_it = std.mem.tokenizeAny(u8, line[0..i], " \t");
-//         while (words_it.next()) |w| {
-//             try program.appendSlice(w);
-//         }
-//     } else {
-//         var words_it = std.mem.tokenizeAny(u8, line, " \t");
-//         while (words_it.next()) |w| {
-//             try program.appendSlice(w);
-//         }
-//     }
-// }
-//     return program;
-// }
 
 const TermCooker = struct {
     const Self = @This();
