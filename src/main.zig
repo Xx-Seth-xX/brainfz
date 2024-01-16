@@ -20,7 +20,6 @@ const VirtualMachine = struct {
     ptr: usize,
     program: []const u8,
     iptr: usize,
-    io_file: std.fs.File,
 
     // > 	Increment the data pointer by one (to point to the next cell to the right).
     // < 	Decrement the data pointer by one (to point to the next cell to the left).
@@ -60,13 +59,12 @@ const VirtualMachine = struct {
         self.ptr = 0;
         self.memory = [_]MemType{0} ** size;
     }
-    fn init(program: []const u8, io_file: std.fs.File) Self {
+    fn init(program: []const u8) Self {
         return Self{
             .memory = [_]MemType{0} ** size,
             .ptr = 0,
             .program = program,
             .iptr = 0,
-            .io_file = io_file,
         };
     }
     inline fn getAt(self: Self) MemType {
@@ -102,7 +100,7 @@ const VirtualMachine = struct {
     }
     fn get(self: *Self) !void {
         var buff: [1]u8 = undefined;
-        if (try self.io_file.read(&buff) == 0) {
+        if (try stdin.read(&buff) == 0) {
             buff[0] = 0;
         }
         self.memory[self.ptr] = @as(MemType, @intCast(buff[0]));
@@ -197,6 +195,24 @@ fn parseProgram(alloc: std.mem.Allocator, text: []const u8) !std.ArrayList(u8) {
     return program;
 }
 
+const terminal_flags_to_remove = std.os.system.ECHO | std.os.system.ICANON;
+fn unCookTerminal() !void {
+    // Get termios struct
+    var termios = try std.os.tcgetattr(stdin.handle);
+
+    // Set to 0 echo and icanon flags
+    termios.lflag &= ~@as(std.os.system.tcflag_t, terminal_flags_to_remove);
+    try std.os.tcsetattr(stdin.handle, .FLUSH, termios);
+}
+
+fn reCookTerminal() !void {
+    // Get termios struct
+    var termios = try std.os.tcgetattr(stdin.handle);
+
+    termios.lflag |= @as(std.os.system.tcflag_t, terminal_flags_to_remove);
+    try std.os.tcsetattr(stdin.handle, .FLUSH, termios);
+}
+
 pub fn main() !u8 {
     var args_it = std.process.args();
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -213,26 +229,15 @@ pub fn main() !u8 {
     var program = try loadProgram(alloc, filename);
     defer program.deinit();
 
-    // Uncook terminal
-    var tty = try std.fs.openFileAbsolute("/dev/tty", .{});
-    defer tty.close();
-
-    const original_termios = try std.os.tcgetattr(tty.handle);
-    var raw = original_termios;
-
-    // Set to 0 echo and icanon flags
-    raw.lflag &= ~@as(std.os.system.tcflag_t, std.os.system.ECHO | std.os.system.ICANON);
-    try std.os.tcsetattr(tty.handle, .FLUSH, raw);
-
     // std.log.info("Executing program: \"{s}\"", .{program.items});
-    var vm = VirtualMachine.init(program.items, tty);
+    try unCookTerminal();
+    var vm = VirtualMachine.init(program.items);
     vm.execute_program() catch |err| {
-        try std.os.tcsetattr(tty.handle, .FLUSH, original_termios);
         std.log.err("Error executing machine", .{});
         std.log.err("Final state = {}", .{vm});
         return err;
     };
-    try std.os.tcsetattr(tty.handle, .FLUSH, original_termios);
+    try reCookTerminal();
 
     // std.log.info("Final state:", .{});
     // std.log.info("    ptr = {}, iptr = {}", .{ vm.ptr, vm.iptr });
