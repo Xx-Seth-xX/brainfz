@@ -12,7 +12,6 @@ const VirtualMachine = struct {
         UnmatchedOpeningBracket,
         UnmatchedClosingBracket,
         OutOfBoundsPtr,
-        InvalidInstruction,
     };
 
     fn isOperand(c: u8) bool {
@@ -49,10 +48,7 @@ const VirtualMachine = struct {
                 ',' => try self.get(),
                 '[' => try self.loopb(),
                 ']' => try self.loope(),
-                else => {
-                    std.log.err("Encountered invalid char {} at index {}", .{ instr, self.iptr });
-                    return error.InvalidInstruction;
-                },
+                else => {},
             }
             self.iptr += 1;
         }
@@ -124,12 +120,13 @@ const VirtualMachine = struct {
 
         // Tracks nesting
         var counter: usize = 0;
-        self.iptr += 1;
-        while (self.iptr < self.program.len) : (self.iptr += 1) {
-            switch (self.program[self.iptr]) {
+        var aux_ptr = self.iptr + 1;
+        while (aux_ptr < self.program.len) : (aux_ptr += 1) {
+            switch (self.program[aux_ptr]) {
                 '[' => counter += 1,
                 ']' => {
                     if (counter == 0) {
+                        self.iptr = aux_ptr;
                         return;
                     } else {
                         counter -= 1;
@@ -150,12 +147,13 @@ const VirtualMachine = struct {
         }
         // Tracks nesting
         var counter: usize = 0;
-        while (self.iptr > 0) : (self.iptr -= 1) {
-            switch (self.program[self.iptr - 1]) {
+        var aux_ptr = self.iptr;
+        while (aux_ptr > 0) : (aux_ptr -= 1) {
+            switch (self.program[aux_ptr - 1]) {
                 ']' => counter += 1,
                 '[' => {
                     if (counter == 0) {
-                        self.iptr -= 1;
+                        self.iptr = aux_ptr - 1;
                         return;
                     } else {
                         counter -= 1;
@@ -168,38 +166,30 @@ const VirtualMachine = struct {
     }
 };
 
-fn loadProgram(alloc: std.mem.Allocator, filename: []const u8) !std.ArrayList(u8) {
-    const file = try std.fs.cwd().openFile(filename, .{});
-    const text = try file.readToEndAlloc(alloc, 1024 * 1024); // 1MB should be more than enough
-    defer alloc.free(text);
-    const program = try parseProgram(alloc, text);
-    return program;
-}
-
-fn parseProgram(alloc: std.mem.Allocator, text: []const u8) !std.ArrayList(u8) {
-    var program = std.ArrayList(u8).init(alloc);
-    for (text) |c| {
-        if (VirtualMachine.isOperand(c)) {
-            try program.append(c);
-        }
-    }
-    // var iter_lines = std.mem.tokenizeScalar(u8, text, '\n');
-    // while (iter_lines.next()) |line| {
-    //     const index_of_comment = std.mem.indexOf(u8, line, "//");
-    //     if (index_of_comment) |i| {
-    //         var words_it = std.mem.tokenizeAny(u8, line[0..i], " \t");
-    //         while (words_it.next()) |w| {
-    //             try program.appendSlice(w);
-    //         }
-    //     } else {
-    //         var words_it = std.mem.tokenizeAny(u8, line, " \t");
-    //         while (words_it.next()) |w| {
-    //             try program.appendSlice(w);
-    //         }
-    //     }
-    // }
-    return program;
-}
+// fn parseProgram(alloc: std.mem.Allocator, text: []const u8) !std.ArrayList(u8) {
+//     var program = std.ArrayList(u8).init(alloc);
+//     for (text) |c| {
+//         if (VirtualMachine.isOperand(c)) {
+//             try program.append(c);
+//         }
+//     }
+// var iter_lines = std.mem.tokenizeScalar(u8, text, '\n');
+// while (iter_lines.next()) |line| {
+//     const index_of_comment = std.mem.indexOf(u8, line, "//");
+//     if (index_of_comment) |i| {
+//         var words_it = std.mem.tokenizeAny(u8, line[0..i], " \t");
+//         while (words_it.next()) |w| {
+//             try program.appendSlice(w);
+//         }
+//     } else {
+//         var words_it = std.mem.tokenizeAny(u8, line, " \t");
+//         while (words_it.next()) |w| {
+//             try program.appendSlice(w);
+//         }
+//     }
+// }
+//     return program;
+// }
 
 const TermCooker = struct {
     const Self = @This();
@@ -242,25 +232,45 @@ pub fn main() !u8 {
         return 0xff;
     };
 
-    var program = try loadProgram(alloc, filename);
-    defer program.deinit();
+    var file = try std.fs.cwd().openFile(filename, .{});
+    const program = try file.readToEndAlloc(alloc, 1024 * 1024); // 1MB should be more than enough
+    defer alloc.free(program);
 
     var tc = try TermCooker.init(stdin);
 
-    // std.log.info("Executing program: \"{s}\"", .{program.items});
     try tc.unCookTerminal();
     defer tc.reCookTerminal();
-    var vm = VirtualMachine.init(program.items);
+    var vm = VirtualMachine.init(program);
     vm.execute_program() catch |err| {
-        std.log.err("Error executing machine", .{});
         switch (err) {
             error.UnmatchedOpeningBracket,
             error.UnmatchedClosingBracket,
             error.OutOfBoundsPtr,
-            error.InvalidInstruction,
             => {
-                std.log.err("{}", .{err});
-                // std.log.err("Final state = {}", .{vm});
+                std.log.err(
+                    "Error \"{s}\" executing machine at pos {}",
+                    .{ @errorName(err), vm.iptr },
+                );
+                var l_off: usize = 0;
+                var line_n: usize = 0;
+                while (std.mem.indexOfScalarPos(u8, program, l_off, '\n')) |nl_off| {
+                    line_n += 1;
+                    if (nl_off > vm.iptr) {
+                        std.log.err("Line number: {}", .{line_n});
+                        const offset = vm.iptr - l_off;
+                        var buff = [_]u8{' '} ** 160;
+                        std.log.err("{s}", .{program[l_off..nl_off]});
+                        if (offset < buff.len) {
+                            buff[offset] = '^';
+                            std.log.err("{s}", .{buff[0 .. offset + 1]});
+                        } else {
+                            std.log.err("By the way, write shorter lines", .{});
+                        }
+                        break;
+                    } else {
+                        l_off = nl_off + 1;
+                    }
+                }
             },
             else => return err,
         }
