@@ -8,6 +8,12 @@ const VirtualMachine = struct {
     const MemType = u8;
     const debug: bool = false;
     const operands = "><+-.,[]";
+    const Error = error{
+        UnmatchedOpeningBracket,
+        UnmatchedClosingBracket,
+        OutOfBoundsPtr,
+        InvalidInstruction,
+    };
 
     fn isOperand(c: u8) bool {
         for (VirtualMachine.operands) |op| {
@@ -195,23 +201,33 @@ fn parseProgram(alloc: std.mem.Allocator, text: []const u8) !std.ArrayList(u8) {
     return program;
 }
 
-const terminal_flags_to_remove = std.os.system.ECHO | std.os.system.ICANON;
-fn unCookTerminal() !void {
-    // Get termios struct
-    var termios = try std.os.tcgetattr(stdin.handle);
+const TermCooker = struct {
+    const Self = @This();
+    const terminal_flags_to_remove = std.os.system.ECHO | std.os.system.ICANON;
+    termios: std.os.system.termios,
+    file: std.fs.File,
 
-    // Set to 0 echo and icanon flags
-    termios.lflag &= ~@as(std.os.system.tcflag_t, terminal_flags_to_remove);
-    try std.os.tcsetattr(stdin.handle, .FLUSH, termios);
-}
+    fn init(file: std.fs.File) !Self {
+        return .{
+            .termios = try std.os.tcgetattr(file.handle),
+            .file = file,
+        };
+    }
+    fn unCookTerminal(self: *Self) !void {
 
-fn reCookTerminal() !void {
-    // Get termios struct
-    var termios = try std.os.tcgetattr(stdin.handle);
+        // Set to 0 echo and icanon flags
+        self.termios.lflag &= ~@as(std.os.system.tcflag_t, terminal_flags_to_remove);
+        try std.os.tcsetattr(self.file.handle, .FLUSH, self.termios);
+    }
 
-    termios.lflag |= @as(std.os.system.tcflag_t, terminal_flags_to_remove);
-    try std.os.tcsetattr(stdin.handle, .FLUSH, termios);
-}
+    fn reCookTerminal(self: *Self) void {
+        self.termios.lflag |= @as(std.os.system.tcflag_t, terminal_flags_to_remove);
+        std.os.tcsetattr(self.file.handle, .FLUSH, self.termios) catch {
+            std.log.err("*IMPORTANT* Error while trying to reset terminal to previous state.", .{});
+            std.log.err("*IMPORTANT* Fix it by blindly typing reset and enter", .{});
+        };
+    }
+};
 
 pub fn main() !u8 {
     var args_it = std.process.args();
@@ -223,21 +239,33 @@ pub fn main() !u8 {
     const filename = args_it.next() orelse {
         std.log.err("You have to provide a filename", .{});
         std.log.err("Usage: {s} <program> ", .{program_name});
-        return 1;
+        return 0xff;
     };
 
     var program = try loadProgram(alloc, filename);
     defer program.deinit();
 
+    var tc = try TermCooker.init(stdin);
+
     // std.log.info("Executing program: \"{s}\"", .{program.items});
-    try unCookTerminal();
+    try tc.unCookTerminal();
+    defer tc.reCookTerminal();
     var vm = VirtualMachine.init(program.items);
     vm.execute_program() catch |err| {
         std.log.err("Error executing machine", .{});
-        std.log.err("Final state = {}", .{vm});
-        return err;
+        switch (err) {
+            error.UnmatchedOpeningBracket,
+            error.UnmatchedClosingBracket,
+            error.OutOfBoundsPtr,
+            error.InvalidInstruction,
+            => {
+                std.log.err("{}", .{err});
+                // std.log.err("Final state = {}", .{vm});
+            },
+            else => return err,
+        }
+        return 0xff;
     };
-    try reCookTerminal();
 
     // std.log.info("Final state:", .{});
     // std.log.info("    ptr = {}, iptr = {}", .{ vm.ptr, vm.iptr });
