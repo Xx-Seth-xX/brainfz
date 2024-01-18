@@ -253,19 +253,45 @@ fn parseProgram(alloc: std.mem.Allocator, text: []const u8) !std.ArrayList(Op) {
     }
 }
 
+fn usage(exe_name: []const u8) void {
+    std.log.err("Usage: {s} option <program> ", .{exe_name});
+    std.log.err("     e    Interpretes the program and executes it", .{});
+    std.log.err("     p    Interprets the program and prints intermediate representation", .{});
+}
+
 pub fn main() !u8 {
     var args_it = std.process.args();
+    const exe_name = args_it.next().?;
+    if (std.os.argv.len == 1) {
+        usage(exe_name);
+        return 0xff;
+    }
+    var filename: []const u8 = undefined;
+    var exec_machine = false;
+    while (args_it.next()) |arg| {
+        if (std.mem.eql(u8, "e", arg)) {
+            filename = args_it.next() orelse {
+                std.log.err("You have to provide a filename", .{});
+                usage(exe_name);
+                return 0xff;
+            };
+        } else if (std.mem.eql(u8, "p", arg)) {
+            filename = args_it.next() orelse {
+                std.log.err("You have to provide a filename", .{});
+                usage(exe_name);
+                return 0xff;
+            };
+            exec_machine = true;
+        } else {
+            std.log.err("Invalid options {s}", .{arg});
+            usage(exe_name);
+            return 0xff;
+        }
+    }
+
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
-
-    const program_name = args_it.next().?;
-    const filename = args_it.next() orelse {
-        std.log.err("You have to provide a filename", .{});
-        std.log.err("Usage: {s} <program> ", .{program_name});
-        return 0xff;
-    };
-
     var file = try std.fs.cwd().openFile(filename, .{});
     const text = try file.readToEndAlloc(alloc, 1024 * 1024); // 1MB should be more than enough
     defer alloc.free(text);
@@ -277,21 +303,22 @@ pub fn main() !u8 {
     };
     defer program.deinit();
 
-    // for (program.items, 0..) |op, i| {
-    //     std.log.info("{}: {s} ({})", .{ i, @tagName(op.kind), op.operand });
-    // }
-
-    var tc = try TermCooker.init(stdin);
-
-    try tc.unCookTerminal();
-    defer tc.reCookTerminal();
-    var vm = VirtualMachine.init(program.items);
-    vm.execute_program() catch |err| {
-        switch (err) {
-            VirtualMachine.Error.RuntimeError => return 0xff,
-            else => return err,
+    if (exec_machine) {
+        var tc = try TermCooker.init(stdin);
+        try tc.unCookTerminal();
+        defer tc.reCookTerminal();
+        var vm = VirtualMachine.init(program.items);
+        vm.execute_program() catch |err| {
+            switch (err) {
+                VirtualMachine.Error.RuntimeError => return 0xff,
+                else => return err,
+            }
+        };
+    } else {
+        for (program.items, 0..) |op, i| {
+            std.log.info("{}: {s} ({})", .{ i, @tagName(op.kind), op.operand });
         }
-    };
+    }
 
     // std.log.info("Final state:", .{});
     // std.log.info("    ptr = {}, iptr = {}", .{ vm.ptr, vm.iptr });
